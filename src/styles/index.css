@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #e2e8f0;
+  background-color: #020817;
+  font-family: Inter, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body, #root {
+  min-height: 100%;
+  min-width: 0;
+  margin: 0;
+  background: #020817;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+
+.card-surface {
+  @apply rounded-2xl border border-slate-800 bg-slate-900/80 shadow-soft;
+}
+
+.pill {
+  @apply inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.12em];
+}
+
+input[type='file'] {
+  display: none;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
