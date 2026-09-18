@@ -1,0 +1,205 @@
+import type { CreativeConcept, GameDNA, GameProject, GameplayMoment } from '../types/creative';
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:8000';
+
+type BackendGameInput = {
+  game_name: string;
+  description: string;
+  market: string;
+  target_audience: string;
+  usp?: string | null;
+};
+
+type BackendCreativeConcept = {
+  id: string;
+  name: string;
+  angle: string;
+  hook: string;
+  scene_description: string;
+  emotion: string;
+  target_audience: string;
+  required_gameplay_conditions?: string[];
+  preferred_gameplay_events?: string[];
+  visual_requirements?: string[];
+};
+
+type BackendGameDNA = {
+  genre?: string;
+  core_mechanics?: string[];
+  emotional_drivers?: string[];
+  visual_drivers?: string[];
+  ua_angles?: string[];
+  audience_angles?: string[];
+};
+
+type BackendGameAnalysisResponse = {
+  game: BackendGameInput;
+  game_dna: BackendGameDNA;
+  creative_concepts: BackendCreativeConcept[];
+};
+
+type BackendGameplayMoment = {
+  id?: string;
+  start_time?: number;
+  end_time?: number;
+  event_type?: string;
+  description?: string;
+  tags?: string[];
+  intensity?: number;
+  creative_value?: number;
+};
+
+type BackendGameplayResponse = {
+  video_duration?: number;
+  moment_count?: number;
+  moments: BackendGameplayMoment[];
+};
+
+function serializeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown backend error';
+}
+
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' }),
+      ...(options.headers ?? {}),
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+function normalizeArray(items: string[] | undefined): string[] {
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function formatTimestamp(seconds: number | undefined): string {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds)) {
+    return '00:00';
+  }
+
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(safeSeconds / 60)
+    .toString()
+    .padStart(2, '0');
+  const secs = (safeSeconds % 60).toString().padStart(2, '0');
+
+  return `${mins}:${secs}`;
+}
+
+export function mapGameDNAFromBackend(data: BackendGameDNA | undefined): GameDNA {
+  const genre = data?.genre || 'Puzzle';
+  const coreMechanics = normalizeArray(data?.core_mechanics);
+  const emotionalDrivers = normalizeArray(data?.emotional_drivers);
+  const visualDrivers = normalizeArray(data?.visual_drivers);
+  const uaAngles = normalizeArray(data?.ua_angles);
+
+  return {
+    genre,
+    coreMechanic: coreMechanics[0] || 'Gameplay strategy',
+    emotionalDrivers: emotionalDrivers.length ? emotionalDrivers : ['Tension', 'Satisfaction'],
+    visualDrivers: visualDrivers.length ? visualDrivers : ['Busy board', 'Color contrast'],
+    uaAngles: uaAngles.length ? uaAngles : ['High-stakes decision', 'Satisfying clear'],
+  };
+}
+
+export function mapCreativeConceptsFromBackend(items: BackendCreativeConcept[] | undefined): CreativeConcept[] {
+  return (items ?? []).map((item, index) => ({
+    id: item.id,
+    name: item.name,
+    emotion: item.emotion,
+    hook: item.hook,
+    angle: item.angle,
+    requiredScene: item.scene_description,
+    targetAudience: item.target_audience,
+    requiredGameplayConditions: item.required_gameplay_conditions,
+    preferredGameplayEvents: item.preferred_gameplay_events,
+    visualRequirements: item.visual_requirements,
+    selected: index < 2,
+  }));
+}
+
+export function mapGameplayMomentsFromBackend(items: BackendGameplayMoment[] | undefined): GameplayMoment[] {
+  return (items ?? []).map((item, index) => ({
+    id: item.id || `m${index + 1}`,
+    start: formatTimestamp(item.start_time),
+    end: formatTimestamp(item.end_time),
+    title: item.event_type || `Moment ${index + 1}`,
+    tag: item.tags?.[0] || item.event_type || 'Gameplay',
+    description: item.description || 'Key gameplay event captured for creative analysis.',
+    confidence: Math.round(((item.creative_value ?? 0.8) * 100)),
+    thumbnail: '/demo/thumb-1.jpg',
+  }));
+}
+
+export async function analyzeGameWithBackend(game: BackendGameInput): Promise<{
+  project: GameProject;
+  gameDNA: GameDNA;
+  concepts: CreativeConcept[];
+}> {
+  const response = await fetchJson<BackendGameAnalysisResponse>('/api/v1/creative-brain/analyze', {
+    method: 'POST',
+    body: JSON.stringify(game),
+  });
+
+  const project: GameProject = {
+    id: 'backend-project',
+    name: response.game.game_name,
+    fileName: 'uploaded-gameplay.mp4',
+    duration: 60,
+    market: response.game.market,
+    audience: response.game.target_audience,
+    usp: response.game.usp || 'Generated by backend analysis',
+    description: response.game.description,
+  };
+
+  const gameDNA = mapGameDNAFromBackend(response.game_dna);
+  const concepts = mapCreativeConceptsFromBackend(response.creative_concepts);
+
+  return { project, gameDNA, concepts };
+}
+
+export async function analyzeGameplayWithBackend(videoFile: File, game: BackendGameInput): Promise<GameplayMoment[]> {
+  const formData = new FormData();
+  formData.append('video', videoFile);
+  formData.append('game', JSON.stringify(game));
+  formData.append('extract_clips', 'true');
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/gameplay-intelligence/analyze`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Gameplay analysis failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as BackendGameplayResponse;
+  return mapGameplayMomentsFromBackend(payload.moments);
+}
+
+export function buildGamePayloadFromProject(project: GameProject): BackendGameInput {
+  return {
+    game_name: project.name,
+    description: project.description,
+    market: project.market,
+    target_audience: project.audience,
+    usp: project.usp,
+  };
+}
+
+export function formatApiError(error: unknown): string {
+  return serializeError(error);
+}

@@ -1,7 +1,7 @@
 export type StageStatus = 'Not started' | 'In progress' | 'Completed' | 'Needs attention';
 export type QAStatus = 'READY TO TEST' | 'NEEDS REPAIR' | 'REJECTED';
 export type CheckState = 'pass' | 'warning' | 'fail';
-export type ConceptEmotion = 'Tension' | 'Challenge' | 'Satisfaction' | 'Frustration' | 'Rescue';
+export type ConceptEmotion = string;
 
 export interface GameProject {
   id: string;
@@ -43,8 +43,33 @@ export interface CreativeConcept {
   hook: string;
   angle: string;
   requiredScene: string;
-  confidence: number;
+  targetAudience?: string;
+  requiredGameplayConditions?: string[];
+  preferredGameplayEvents?: string[];
+  visualRequirements?: string[];
+  confidence?: number;
   selected?: boolean;
+}
+
+export interface BackendGameResponse {
+  game_name: string;
+  description: string;
+  market: string;
+  target_audience: string;
+  usp?: string | null;
+}
+
+export interface BackendCreativeResponse {
+  id?: string;
+  name?: string;
+  angle?: string;
+  hook?: string;
+  scene_description?: string;
+  emotion?: string;
+  target_audience?: string;
+  required_gameplay_conditions?: string[];
+  preferred_gameplay_events?: string[];
+  visual_requirements?: string[];
 }
 
 export interface FootageMatch {

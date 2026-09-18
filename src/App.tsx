@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type ChangeEvent, useMemo, useState } from 'react';
 import {
   ArrowRight,
   BarChart3,
@@ -20,12 +20,12 @@ import {
   XCircle
 } from 'lucide-react';
 import { defaultConcepts, defaultGameDNA, defaultMoments, defaultProject, defaultQAResults, defaultTimeline, defaultVariants } from './data/mockData';
-import type { CreativeConcept, GameProject, GameplayMoment, NotificationItem, QAStatus, StageStatus } from './types/creative';
+import type { CreativeConcept, GameDNA, GameProject, GameplayMoment, NotificationItem, QAStatus, StageStatus } from './types/creative';
+import { analyzeGameWithBackend, analyzeGameplayWithBackend, buildGamePayloadFromProject, formatApiError } from './services/creativeApi';
 
 const navItems = [
   'Overview',
   'Game Input',
-  'Creative Strategy',
   'Gameplay Library',
   'Footage Matching',
   'Generate Creatives',
@@ -46,21 +46,48 @@ const overviewCards = [
 const filterKeys = ['All', 'Ready to Test', 'Needs Repair', 'Rejected'];
 
 function App() {
-  const [project] = useState<GameProject>(defaultProject);
+  const [project, setProject] = useState<GameProject>(defaultProject);
   const [selectedStage, setSelectedStage] = useState('Overview');
   const [selectedConcepts, setSelectedConcepts] = useState<string[]>(['last-slot-panic', 'satisfying-sort']);
-  const [concepts] = useState<CreativeConcept[]>(defaultConcepts);
-  const [moments] = useState<GameplayMoment[]>(defaultMoments);
+  const [concepts, setConcepts] = useState<CreativeConcept[]>(defaultConcepts);
+  const [gameDNA, setGameDNA] = useState<GameDNA>(defaultGameDNA);
+  const [moments, setMoments] = useState<GameplayMoment[]>(defaultMoments);
+  const [selectedMoment, setSelectedMoment] = useState<GameplayMoment | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([
-    { id: 'n1', title: 'Demo ready', message: 'Bus Sort Puzzle pipeline loaded.', type: 'success' }
+    { id: 'n1', title: 'Demo ready', message: `${defaultProject.name} pipeline loaded.`, type: 'success' }
   ]);
   const [filter, setFilter] = useState('All');
+  const [isLoading, setIsLoading] = useState(false);
+  const [uploadedVideo, setUploadedVideo] = useState<File | null>(null);
 
   const currentStatus: StageStatus = 'Completed';
+  const activeFileName = uploadedVideo?.name ?? project.fileName ?? 'No file selected';
+  const activeFileSize = uploadedVideo ? `${(uploadedVideo.size / (1024 * 1024)).toFixed(1)} MB` : 'Not selected';
+  const activeConcept = useMemo(() => {
+    if (selectedConcepts.length === 0) {
+      return concepts[0] ?? defaultConcepts[0];
+    }
+
+    return concepts.find((concept) => selectedConcepts.includes(concept.id)) ?? concepts[0] ?? defaultConcepts[0];
+  }, [concepts, selectedConcepts]);
+
+  const handleVideoFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setUploadedVideo(file);
+    setMoments([]);
+    setSelectedMoment(null);
+
+    if (file) {
+      setProject((prev) => ({
+        ...prev,
+        fileName: file.name,
+        duration: Math.max(1, Math.round(file.size / 1000000 / 0.6))
+      }));
+    }
+  };
 
   const statusSummary = useMemo(() => [
     { label: 'Game Input', status: 'Completed' },
-    { label: 'Strategy', status: 'Completed' },
     { label: 'Footage', status: 'In progress' },
     { label: 'Generation', status: 'Completed' },
     { label: 'QA', status: 'Needs attention' },
@@ -74,6 +101,86 @@ function App() {
   const addNotification = (type: NotificationItem['type'], title: string, message: string) => {
     const item: NotificationItem = { id: crypto.randomUUID(), title, message, type };
     setNotifications((prev) => [item, ...prev].slice(0, 4));
+  };
+
+  const loadDemoDefaults = () => {
+    setProject(defaultProject);
+    setGameDNA(defaultGameDNA);
+    setConcepts(defaultConcepts);
+    setMoments(defaultMoments);
+    setSelectedMoment(null);
+    setSelectedConcepts(['last-slot-panic', 'satisfying-sort']);
+    setUploadedVideo(null);
+    setSelectedStage('Overview');
+  };
+
+  const updateProjectField = <K extends keyof GameProject>(field: K, value: GameProject[K]) => {
+    setProject((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleAnalyzeGame = async () => {
+    try {
+      setIsLoading(true);
+      const payload = buildGamePayloadFromProject(project);
+      const { project: backendProject, gameDNA: backendGameDNA, concepts: backendConcepts } = await analyzeGameWithBackend(payload);
+
+      setProject(backendProject);
+      setGameDNA(backendGameDNA);
+      setConcepts(backendConcepts);
+      setSelectedConcepts(backendConcepts.slice(0, 2).map((concept) => concept.id));
+
+      if (uploadedVideo) {
+        const backendMoments = await analyzeGameplayWithBackend(uploadedVideo, buildGamePayloadFromProject(backendProject));
+        setMoments(backendMoments);
+        setSelectedMoment(null);
+        setSelectedStage('Gameplay Library');
+        addNotification('success', 'Game and video analyzed', `Backend returned ${backendMoments.length} gameplay moments from ${uploadedVideo.name}.`);
+      } else {
+        setSelectedStage('Game Input');
+        addNotification('success', 'Game analyzed', 'The frontend received live backend data. Select a video to continue with gameplay analysis.');
+      }
+    } catch (error) {
+      addNotification('error', 'Analysis failed', formatApiError(error));
+      setMoments([]);
+      setGameDNA(defaultGameDNA);
+      setConcepts(defaultConcepts);
+      setSelectedConcepts(['last-slot-panic', 'satisfying-sort']);
+      setSelectedMoment(null);
+      setSelectedStage('Game Input');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAnalyzeGameplay = async () => {
+    try {
+      setIsLoading(true);
+
+      if (!uploadedVideo) {
+        setMoments([]);
+        setSelectedMoment(null);
+        setSelectedStage('Gameplay Library');
+        addNotification('warning', 'Video required', 'Select a gameplay video before analyzing footage.');
+        return;
+      }
+
+      const payload = buildGamePayloadFromProject(project);
+      const backendMoments = await analyzeGameplayWithBackend(uploadedVideo, payload);
+      setMoments(backendMoments);
+      setSelectedMoment(null);
+      setSelectedStage('Gameplay Library');
+      addNotification('success', 'Gameplay analyzed', `Detected ${backendMoments.length} powerful moments from the uploaded video.`);
+    } catch (error) {
+      setMoments([]);
+      setSelectedMoment(null);
+      setSelectedStage('Gameplay Library');
+      addNotification('error', 'Gameplay analysis failed', formatApiError(error));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const AppShell = () => (
@@ -92,7 +199,7 @@ function App() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-violet-200/90">Current demo</p>
-                <p className="mt-1 text-sm font-semibold text-white">Bus Sort Puzzle</p>
+                <p className="mt-1 text-sm font-semibold text-white">{project.name}</p>
               </div>
               <span className="pill border-violet-500/40 bg-violet-500/10 text-violet-200">Demo</span>
             </div>
@@ -142,7 +249,7 @@ function App() {
             </div>
             <div className="flex items-center gap-3">
               <span className="pill border-emerald-500/30 bg-emerald-500/10 text-emerald-200">Demo mode</span>
-              <button type="button" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-100 hover:border-slate-500" onClick={() => addNotification('success', 'Demo reset', 'The mock project was reset to the default Bus Sort Puzzle demo.')}>Reset Demo</button>
+              <button type="button" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-100 hover:border-slate-500" onClick={() => addNotification('success', 'Demo reset', `The mock project was reset to the default ${project.name} demo.`)}>Reset Demo</button>
             </div>
           </header>
 
@@ -154,8 +261,6 @@ function App() {
               </div>
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5">Game Input</span>
-                <ArrowRight size={14} className="text-slate-500" />
-                <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5">Strategy</span>
                 <ArrowRight size={14} className="text-slate-500" />
                 <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5">Footage</span>
                 <ArrowRight size={14} className="text-slate-500" />
@@ -179,26 +284,26 @@ function App() {
                     <div className="mb-4 flex items-center justify-between">
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Project</p>
-                        <h4 className="mt-1 text-xl font-semibold text-white">Bus Sort Puzzle</h4>
+                        <h4 className="mt-1 text-xl font-semibold text-white">{project.name}</h4>
                       </div>
                       <span className="pill border-emerald-500/40 bg-emerald-500/10 text-emerald-200">Ready</span>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                         <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Market</p>
-                        <p className="mt-2 text-base font-medium text-white">United States</p>
+                        <p className="mt-2 text-base font-medium text-white">{project.market}</p>
                       </div>
                       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                         <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Audience</p>
-                        <p className="mt-2 text-base font-medium text-white">Female, 18–35</p>
+                        <p className="mt-2 text-base font-medium text-white">{project.audience}</p>
                       </div>
                     </div>
                     <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                       <p className="text-xs uppercase tracking-[0.16em] text-slate-400">USP</p>
-                      <p className="mt-2 text-sm text-slate-200">Satisfying sorting puzzle with high-tension final-slot moments</p>
+                      <p className="mt-2 text-sm text-slate-200">{project.usp}</p>
                     </div>
                     <div className="mt-6 flex flex-wrap gap-3">
-                      <button type="button" className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500" onClick={() => setSelectedStage('Creative Strategy')}>Continue Workflow</button>
+                      <button type="button" className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500" onClick={() => setSelectedStage('Game Input')}>Continue Workflow</button>
                       <button type="button" className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-slate-100 hover:border-slate-500">Start New Project</button>
                     </div>
                   </section>
@@ -253,24 +358,27 @@ function App() {
                     <span className="pill border-sky-500/30 bg-sky-500/10 text-sky-200">Draft</span>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block text-sm text-slate-300"><span>Game name</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue={project.name} /></label>
-                    <label className="block text-sm text-slate-300"><span>Target market</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue={project.market} /></label>
-                    <label className="block text-sm text-slate-300 md:col-span-2"><span>Game description</span><textarea className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue={project.description} /></label>
-                    <label className="block text-sm text-slate-300"><span>Target audience</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue={project.audience} /></label>
-                    <label className="block text-sm text-slate-300"><span>USP</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue={project.usp} /></label>
+                    <label className="block text-sm text-slate-300"><span>Game name</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={project.name} onChange={(event) => updateProjectField('name', event.target.value)} /></label>
+                    <label className="block text-sm text-slate-300"><span>Target market</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={project.market} onChange={(event) => updateProjectField('market', event.target.value)} /></label>
+                    <label className="block text-sm text-slate-300 md:col-span-2"><span>Game description</span><textarea className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={project.description} onChange={(event) => updateProjectField('description', event.target.value)} /></label>
+                    <label className="block text-sm text-slate-300"><span>Target audience</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={project.audience} onChange={(event) => updateProjectField('audience', event.target.value)} /></label>
+                    <label className="block text-sm text-slate-300"><span>USP</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={project.usp} onChange={(event) => updateProjectField('usp', event.target.value)} /></label>
                   </div>
 
                   <div className="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-medium text-white">Gameplay MP4</p>
-                        <p className="text-xs text-slate-400">gameplay_01.mp4 • 60 sec • 38.4 MB</p>
+                        <p className="text-xs text-slate-400">{activeFileName} • {project.duration || 60} sec • {activeFileSize}</p>
                       </div>
-                      <button type="button" className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">Browse</button>
+                      <label className="cursor-pointer rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
+                        <input type="file" accept="video/mp4" className="hidden" onChange={handleVideoFileChange} />
+                        Browse
+                      </label>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-3">
-                      <button type="button" className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white" onClick={() => addNotification('success', 'Game analyzed', 'The game input was validated and a strategy pipeline was created.')}>Analyze Game</button>
-                      <button type="button" className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm text-slate-200" onClick={() => setSelectedStage('Creative Strategy')}>Use default mock footage</button>
+                      <button type="button" className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-700" disabled={isLoading} onClick={handleAnalyzeGame}>{isLoading ? 'Analyzing…' : uploadedVideo ? 'Analyze Game + Video' : 'Analyze Game'}</button>
+                      <button type="button" className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm text-slate-200" onClick={loadDemoDefaults}>Use default mock footage</button>
                     </div>
                   </div>
                 </section>
@@ -280,9 +388,9 @@ function App() {
                   <div className="mt-4 space-y-3">
                     {[
                       { label: 'MP4 format', value: 'Valid', status: 'pass' },
-                      { label: 'Duration', value: '60s', status: 'pass' },
-                      { label: 'Size', value: '38.4MB', status: 'warning' },
-                      { label: 'Filename', value: 'gameplay_01.mp4', status: 'pass' }
+                      { label: 'Duration', value: `${project.duration || 60}s`, status: 'pass' },
+                      { label: 'Size', value: activeFileSize, status: 'warning' },
+                      { label: 'Filename', value: activeFileName, status: 'pass' }
                     ].map((item) => (
                       <div key={item.label} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
                         <span className="text-sm text-slate-300">{item.label}</span>
@@ -305,10 +413,10 @@ function App() {
                     <button type="button" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200" onClick={() => addNotification('info', 'Updated DNA', 'The creative angle summary was refreshed.')}>Refresh</button>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Genre</p><p className="mt-2 text-base font-medium text-white">{defaultGameDNA.genre}</p></div>
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Core mechanic</p><p className="mt-2 text-base font-medium text-white">{defaultGameDNA.coreMechanic}</p></div>
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Emotional drivers</p><p className="mt-2 text-base font-medium text-white">{defaultGameDNA.emotionalDrivers.join(', ')}</p></div>
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Visual drivers</p><p className="mt-2 text-base font-medium text-white">{defaultGameDNA.visualDrivers.join(', ')}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Genre</p><p className="mt-2 text-base font-medium text-white">{gameDNA.genre}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Core mechanic</p><p className="mt-2 text-base font-medium text-white">{gameDNA.coreMechanic}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Emotional drivers</p><p className="mt-2 text-base font-medium text-white">{gameDNA.emotionalDrivers.join(', ')}</p></div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-slate-400">Visual drivers</p><p className="mt-2 text-base font-medium text-white">{gameDNA.visualDrivers.join(', ')}</p></div>
                   </div>
                 </section>
 
@@ -334,7 +442,11 @@ function App() {
                         <div className="mt-4 grid gap-2 text-sm text-slate-300">
                           <div><span className="text-slate-500">Angle:</span> {concept.angle}</div>
                           <div><span className="text-slate-500">Required scene:</span> {concept.requiredScene}</div>
-                          <div><span className="text-slate-500">Confidence:</span> {concept.confidence}%</div>
+                          {concept.targetAudience && <div><span className="text-slate-500">Target audience:</span> {concept.targetAudience}</div>}
+                          {concept.requiredGameplayConditions?.length ? <div><span className="text-slate-500">Gameplay conditions:</span> {concept.requiredGameplayConditions.join(', ')}</div> : null}
+                          {concept.preferredGameplayEvents?.length ? <div><span className="text-slate-500">Preferred events:</span> {concept.preferredGameplayEvents.join(', ')}</div> : null}
+                          {concept.visualRequirements?.length ? <div><span className="text-slate-500">Visual requirements:</span> {concept.visualRequirements.join(', ')}</div> : null}
+                          {concept.confidence !== undefined && <div><span className="text-slate-500">Confidence:</span> {concept.confidence}%</div>}
                         </div>
                         <div className="mt-4 flex flex-wrap gap-2">
                           <button type="button" className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100" onClick={() => addNotification('warning', 'Hook updated', 'Local hook edit saved for this concept.')}>Edit hook</button>
@@ -346,7 +458,7 @@ function App() {
                 </section>
 
                 <div className="flex justify-end">
-                  <button type="button" className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-700" disabled={selectedConcepts.length === 0} onClick={() => { setSelectedStage('Gameplay Library'); addNotification('success', 'Matching started', 'Matching footage to your concept selection.'); }}>Find Matching Footage</button>
+                  <button type="button" className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-700" disabled={selectedConcepts.length === 0 || isLoading} onClick={handleAnalyzeGameplay}>Find Matching Footage</button>
                 </div>
               </div>
             )}
@@ -364,9 +476,9 @@ function App() {
                   </div>
                 </div>
                 <div className="mb-5 grid gap-4 md:grid-cols-3">
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Duration</p><p className="mt-2 text-base font-medium text-white">00:60</p></div>
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Moments detected</p><p className="mt-2 text-base font-medium text-white">14</p></div>
-                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Search</p><p className="mt-2 text-base font-medium text-white">parking, rescue...</p></div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Duration</p><p className="mt-2 text-base font-medium text-white">00:{String(project.duration || 60).padStart(2, '0')}</p></div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Moments detected</p><p className="mt-2 text-base font-medium text-white">{moments.length}</p></div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Source video</p><p className="mt-2 truncate text-base font-medium text-white">{activeFileName}</p></div>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   {moments.map((moment) => (
@@ -385,7 +497,7 @@ function App() {
                         <span>{moment.confidence}%</span>
                       </div>
                       <div className="mt-4 flex gap-2">
-                        <button type="button" className="flex-1 rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white" onClick={() => setSelectedStage('Footage Matching')}>Select</button>
+                        <button type="button" className="flex-1 rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white" onClick={() => { setSelectedMoment(moment); setSelectedStage('Footage Matching'); }}>Select</button>
                         <button type="button" className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100">Details</button>
                       </div>
                     </article>
@@ -399,30 +511,31 @@ function App() {
                 <section className="card-surface p-5">
                   <div className="mb-5 flex items-center justify-between">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Selected concept</p>
-                      <h4 className="mt-1 text-xl font-semibold text-white">Last Slot Panic</h4>
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Selected gameplay moment</p>
+                      <h4 className="mt-1 text-xl font-semibold text-white">{selectedMoment?.title ?? 'No moment selected'}</h4>
                     </div>
-                    <span className="pill border-violet-500/30 bg-violet-500/10 text-violet-200">97% match</span>
+                    <span className="pill border-violet-500/30 bg-violet-500/10 text-violet-200">{selectedMoment ? `${selectedMoment.confidence}% confidence` : 'Select a moment'}</span>
                   </div>
                   <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-                    <p className="text-sm text-slate-300">Hook: <span className="font-medium text-white">Can you save the last bus?</span></p>
+                    <p className="text-sm text-slate-300">Time: <span className="font-medium text-white">{selectedMoment ? `${selectedMoment.start}–${selectedMoment.end}` : 'No timestamp available'}</span></p>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><span className="text-xs uppercase tracking-[0.16em] text-slate-400">Angle</span><p className="mt-2 text-sm text-white">Last-slot panic</p></div>
-                      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><span className="text-xs uppercase tracking-[0.16em] text-slate-400">Emotional goal</span><p className="mt-2 text-sm text-white">High tension</p></div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><span className="text-xs uppercase tracking-[0.16em] text-slate-400">Event type</span><p className="mt-2 text-sm text-white">{selectedMoment?.title ?? 'No event selected'}</p></div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><span className="text-xs uppercase tracking-[0.16em] text-slate-400">Tag</span><p className="mt-2 text-sm text-white">{selectedMoment?.tag ?? 'No tag available'}</p></div>
                     </div>
+                    <p className="mt-3 text-sm text-slate-300">{selectedMoment?.description ?? 'Select a gameplay moment from the library to view its details.'}</p>
                   </div>
                   <div className="mt-5 rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.18em] text-violet-200">Recommended clip</p>
-                        <h5 className="mt-1 text-lg font-semibold text-white">00:29–00:36 • Last parking slot</h5>
+                        <p className="text-xs uppercase tracking-[0.18em] text-violet-200">Selected footage</p>
+                        <h5 className="mt-1 text-lg font-semibold text-white">{selectedMoment?.title ?? 'No footage selected'}</h5>
                       </div>
                       <button type="button" className="rounded-xl border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">Preview</button>
                     </div>
                     <ul className="mt-3 space-y-2 text-sm text-slate-300">
-                      <li>• Only one parking slot remains</li>
-                      <li>• Bus is waiting</li>
-                      <li>• Visual tension is high</li>
+                      <li>• Timestamp: {selectedMoment ? `${selectedMoment.start}–${selectedMoment.end}` : 'Unavailable'}</li>
+                      <li>• Description: {selectedMoment?.description ?? 'Unavailable'}</li>
+                      <li>• Confidence: {selectedMoment ? `${selectedMoment.confidence}%` : 'Unavailable'}</li>
                     </ul>
                   </div>
                   <div className="mt-5 flex gap-3">
@@ -432,14 +545,13 @@ function App() {
                 </section>
 
                 <aside className="card-surface p-5">
-                  <h4 className="text-lg font-semibold text-white">Missing footage state</h4>
+                  <h4 className="text-lg font-semibold text-white">Selected footage details</h4>
                   <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-                    <p className="font-semibold text-white">No suitable footage found for this concept.</p>
+                    <p className="font-semibold text-white">{selectedMoment?.title ?? 'No gameplay moment selected.'}</p>
                     <div className="mt-3 space-y-2 text-amber-100/90">
-                      <p>Level 23</p>
-                      <p>1 parking slot remaining</p>
-                      <p>3 buses waiting</p>
-                      <p>Record 8–12 seconds</p>
+                      <p>Time: {selectedMoment ? `${selectedMoment.start}–${selectedMoment.end}` : 'Unavailable'}</p>
+                      <p>Tag: {selectedMoment?.tag ?? 'Unavailable'}</p>
+                      <p>Confidence: {selectedMoment ? `${selectedMoment.confidence}%` : 'Unavailable'}</p>
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -459,11 +571,11 @@ function App() {
                     <button type="button" className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">Generate voice-over</button>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block text-sm text-slate-300"><span>Primary hook</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue="Can you save the last bus?" /></label>
-                    <label className="block text-sm text-slate-300"><span>Voice style</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue="Energetic female" /></label>
-                    <label className="block text-sm text-slate-300 md:col-span-2"><span>Supporting copy</span><textarea className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue="One wrong move and the level is over." /></label>
-                    <label className="block text-sm text-slate-300"><span>CTA</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue="Play Now" /></label>
-                    <label className="block text-sm text-slate-300"><span>Subtitle</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" defaultValue="Can you save the last bus?" /></label>
+                    <label className="block text-sm text-slate-300"><span>Primary hook</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={activeConcept?.hook ?? ''} readOnly /></label>
+                    <label className="block text-sm text-slate-300"><span>Voice style</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={activeConcept?.emotion ? `${activeConcept.emotion} / energetic` : 'Energetic female'} readOnly /></label>
+                    <label className="block text-sm text-slate-300 md:col-span-2"><span>Supporting copy</span><textarea className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={activeConcept?.requiredScene ?? ''} readOnly /></label>
+                    <label className="block text-sm text-slate-300"><span>CTA</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={activeConcept?.name ? `Play ${activeConcept.name}` : 'Play Now'} readOnly /></label>
+                    <label className="block text-sm text-slate-300"><span>Subtitle</span><input className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-white" value={activeConcept?.hook ?? ''} readOnly /></label>
                   </div>
                   <div className="mt-5 flex flex-wrap gap-2">
                     <button type="button" className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">Regenerate hook</button>
@@ -479,11 +591,11 @@ function App() {
                   <div className="mx-auto mt-4 flex h-[420px] w-[230px] flex-col justify-between rounded-[30px] border border-slate-700 bg-gradient-to-br from-slate-900 to-slate-800 p-4 shadow-soft">
                     <div className="h-32 rounded-2xl bg-gradient-to-br from-violet-500/20 via-slate-700 to-slate-800" />
                     <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-violet-200">Can you save the last bus?</p>
-                      <p className="mt-2 text-sm text-slate-200">One wrong move and the level is over.</p>
+                      <p className="text-xs uppercase tracking-[0.18em] text-violet-200">{activeConcept?.hook ?? 'Creative hook'}</p>
+                      <p className="mt-2 text-sm text-slate-200">{activeConcept?.requiredScene ?? 'Generated from backend concept data.'}</p>
                     </div>
                     <div className="flex items-center justify-between text-xs text-slate-300">
-                      <span>Play Now</span>
+                      <span>{activeConcept?.name ?? 'Play Now'}</span>
                       <span>● audio</span>
                     </div>
                   </div>

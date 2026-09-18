@@ -1,14 +1,14 @@
 import type { CreativeConcept, GameDNA, GameProject, GameplayMoment, QAResult, TimelineSegment, CreativeVariant, VariationConfig, RecordingBrief, QAStatus, CheckState } from '../types/creative';
 
 export const defaultProject: GameProject = {
-  id: 'bus-sort-puzzle',
-  name: 'Bus Sort Puzzle',
+  id: 'this-is-blast',
+  name: 'This is blast',
   fileName: 'gameplay_01.mp4',
   duration: 60,
-  market: 'United States',
-  audience: 'Female, 18–35',
-  usp: 'Satisfying sorting puzzle with high-tension final-slot moments',
-  description: 'A puzzle game where players manage increasingly crowded bus routes and solve each level by sorting passengers into the right slots.',
+  market: 'US',
+  audience: 'Female 18-35',
+  usp: 'Colorful pixel-art blocks and satisfying shooters sorting.',
+  description: 'A mobile puzzle game where players select shooters to shoot matching color blocks. Players must manage limited shooter\'s capacity and standing slots while solving increasingly difficult sorting puzzles.',
 };
 
 export const defaultGameDNA: GameDNA = {
